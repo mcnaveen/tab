@@ -1,0 +1,70 @@
+# Builds an unsigned Tab.dmg and attaches it to a GitHub Release (on tags)
+# or uploads it as a workflow artifact (on manual runs).
+#
+# The dmg is ad-hoc/unsigned: users installing it must grant Accessibility
+# permission after first launch. Local builds with a stable cert come from
+# scripts/create-signing-cert.sh + scripts/build-local.sh — CI needs no cert.
+
+name: Build DMG
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  dmg:
+    name: Build Tab.dmg
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Project pins the compiler via rust-toolchain.toml, installed on demand
+      - uses: dtolnay/rust-toolchain@stable
+
+      # The Tauri 1 CLI must be built with an older Rust, per README
+      - name: Install tauri-cli (Tauri 1)
+        run: |
+          rustup toolchain install 1.79.0
+          cargo +1.79.0 install tauri-cli@1.6.0 --locked
+
+      - name: Install pnpm and dependencies
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install protobuf
+        run: brew install protobuf
+
+      - name: Build Tab.app and Tab.dmg
+        run: |
+          python3.11 -m venv .venv
+          .venv/bin/pip install -q -r build-scripts/requirements.txt
+          .venv/bin/python build-scripts/main.py build --skip-tests --skip-lints
+
+      - name: Show build output
+        run: ls -lh build/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Tab.dmg
+          path: build/Tab.dmg
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/Tab.dmg
+          generate_release_notes: true
+          draft: true
